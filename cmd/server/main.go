@@ -5,17 +5,22 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 
 	"github.com/Priyanshu-1729/mini-etcd/api"
+	pb "github.com/Priyanshu-1729/mini-etcd/proto"
 	"github.com/Priyanshu-1729/mini-etcd/raft"
 	"github.com/Priyanshu-1729/mini-etcd/server"
 	"github.com/Priyanshu-1729/mini-etcd/store"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/reflection"
 )
 
 func main() {
-	id   := flag.String("id",   "node1",         "node ID")
-	addr := flag.String("addr", "localhost:2379", "listen address")
+	id       := flag.String("id",        "node1",           "node ID")
+	httpAddr := flag.String("addr",      "localhost:2379",  "HTTP listen address")
+	grpcAddr := flag.String("grpc-addr", "localhost:50051", "gRPC listen address")
 	flag.Parse()
 
 	allNodes := map[string]string{
@@ -24,7 +29,7 @@ func main() {
 		"node3": "http://localhost:2381",
 	}
 
-	peers := []string{}
+	peers    := []string{}
 	peerURLs := map[string]string{}
 	for nodeID, url := range allNodes {
 		if nodeID != *id {
@@ -33,17 +38,17 @@ func main() {
 		}
 	}
 
-	s := store.New()
+	s         := store.New()
 	transport := raft.NewHTTPTransport(peerURLs)
 	raftNode  := raft.NewRaftNode(*id, peers, transport)
-	raftServer := raft.NewRaftServer(raftNode)
+	raftSrv   := raft.NewRaftServer(raftNode)
 
-	// apply loop: committed Raft entries → store
+	// apply committed Raft entries to the local store
 	go func() {
 		for msg := range raftNode.ApplyCh() {
 			var cmd api.Command
 			if err := json.Unmarshal(msg.Command, &cmd); err != nil {
-				log.Printf("bad command at index %d: %v", msg.Index, err)
+				log.Printf("[%s] bad command at index %d: %v", *id, msg.Index, err)
 				continue
 			}
 			switch cmd.Op {
@@ -57,12 +62,27 @@ func main() {
 		}
 	}()
 
-	httpServer := server.NewHTTPServer(s, raftNode)
+	// --- HTTP server (REST + Raft RPC) ---
+	httpSrv := server.NewHTTPServer(s, raftNode)
+	mux     := http.NewServeMux()
+	httpSrv.RegisterRoutes(mux)
+	raftSrv.RegisterRoutes(mux)
 
-	mux := http.NewServeMux()
-	httpServer.RegisterRoutes(mux)
-	raftServer.RegisterRoutes(mux)
+	go func() {
+		fmt.Printf("[%s] HTTP listening on %s\n", *id, *httpAddr)
+		log.Fatal(http.ListenAndServe(*httpAddr, mux))
+	}()
 
-	fmt.Printf("[%s] listening on %s\n", *id, *addr)
-	log.Fatal(http.ListenAndServe(*addr, mux))
+	// --- gRPC server ---
+	// reflection lets grpcurl and other tools discover services at runtime
+	grpcSrv := grpc.NewServer()
+	pb.RegisterKVServiceServer(grpcSrv, server.NewGRPCServer(s, raftNode))
+	reflection.Register(grpcSrv)
+
+	lis, err := net.Listen("tcp", *grpcAddr)
+	if err != nil {
+		log.Fatalf("failed to listen on %s: %v", *grpcAddr, err)
+	}
+	fmt.Printf("[%s] gRPC listening on %s\n", *id, *grpcAddr)
+	log.Fatal(grpcSrv.Serve(lis))
 }
