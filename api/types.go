@@ -39,3 +39,10 @@ type DeleteRequest struct {
 type DeleteResponse struct {
 	Success bool `json:"success"`
 }
+
+// Command is what gets proposed to Raft and applied to the store.
+type Command struct {
+	Op    string `json:"op"`  // "put" or "delete"
+	Key   string `json:"key"`
+	Value string `json:"value,omitempty"`
+}

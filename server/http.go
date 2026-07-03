@@ -9,12 +9,18 @@ import (
 	"github.com/Priyanshu-1729/mini-etcd/store"
 )
 
-type HTTPServer struct {
-	store *store.Store
+// Proposer is the interface the HTTP server uses to propose commands to Raft.
+type Proposer interface {
+	Propose(command []byte) bool
 }
 
-func NewHTTPServer(s *store.Store) *HTTPServer {
-	return &HTTPServer{store: s}
+type HTTPServer struct {
+	store    *store.Store
+	proposer Proposer
+}
+
+func NewHTTPServer(s *store.Store, p Proposer) *HTTPServer {
+	return &HTTPServer{store: s, proposer: p}
 }
 
 func (h *HTTPServer) RegisterRoutes(mux *http.ServeMux) {
@@ -48,7 +54,12 @@ func (h *HTTPServer) handlePut(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid body", http.StatusBadRequest)
 		return
 	}
-	h.store.Put(req.Key, req.Value)
+	cmd := api.Command{Op: "put", Key: req.Key, Value: req.Value}
+	data, _ := json.Marshal(cmd)
+	if !h.proposer.Propose(data) {
+		http.Error(w, "not the leader", http.StatusServiceUnavailable)
+		return
+	}
 	writeJSON(w, api.PutResponse{Success: true})
 }
 
@@ -62,7 +73,12 @@ func (h *HTTPServer) handleDelete(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "missing key", http.StatusBadRequest)
 		return
 	}
-	h.store.Delete(key)
+	cmd := api.Command{Op: "delete", Key: key}
+	data, _ := json.Marshal(cmd)
+	if !h.proposer.Propose(data) {
+		http.Error(w, "not the leader", http.StatusServiceUnavailable)
+		return
+	}
 	writeJSON(w, api.DeleteResponse{Success: true})
 }
 
@@ -72,8 +88,6 @@ func (h *HTTPServer) handleWatch(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "missing key", http.StatusBadRequest)
 		return
 	}
-
-	// SSE headers so the browser/curl can stream events
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
@@ -83,7 +97,6 @@ func (h *HTTPServer) handleWatch(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "streaming not supported", http.StatusInternalServerError)
 		return
 	}
-
 	ch, cancel := h.store.Watch(key)
 	defer cancel()
 
