@@ -28,16 +28,13 @@ func main() {
 	dataDir  := flag.String("data-dir",  "data",            "directory for WAL and snapshots")
 	flag.Parse()
 
-	// each node gets its own data directory
-	nodeDir := filepath.Join(*dataDir, *id)
+	nodeDir  := filepath.Join(*dataDir, *id)
 	if err := os.MkdirAll(nodeDir, 0755); err != nil {
 		log.Fatalf("failed to create data dir: %v", err)
 	}
-
 	walPath  := filepath.Join(nodeDir, "raft.wal")
 	snapPath := filepath.Join(nodeDir, "snapshot.json")
 
-	// --- restore snapshot first (if any) ---
 	s := store.New()
 	snap, err := snapshot.Load(snapPath)
 	if err != nil {
@@ -50,7 +47,6 @@ func main() {
 		}
 	}
 
-	// --- replay WAL on top of snapshot ---
 	wal, err := w.Open(walPath)
 	if err != nil {
 		log.Fatalf("failed to open WAL: %v", err)
@@ -64,7 +60,6 @@ func main() {
 		startIndex = snap.LastIndex
 	}
 	for _, rec := range records {
-		// skip entries already covered by the snapshot
 		if rec.Index <= startIndex {
 			continue
 		}
@@ -86,7 +81,6 @@ func main() {
 		"node2": "http://localhost:2380",
 		"node3": "http://localhost:2381",
 	}
-
 	peers    := []string{}
 	peerURLs := map[string]string{}
 	for nodeID, url := range allNodes {
@@ -100,8 +94,6 @@ func main() {
 	raftNode  := raft.NewRaftNode(*id, peers, transport)
 	raftSrv   := raft.NewRaftServer(raftNode)
 
-	// apply committed Raft entries → WAL → store
-	// every write hits the WAL before touching the store
 	applyCount := startIndex
 	go func() {
 		for msg := range raftNode.ApplyCh() {
@@ -110,12 +102,9 @@ func main() {
 				log.Printf("[%s] bad command at index %d: %v", *id, msg.Index, err)
 				continue
 			}
-
-			// write to WAL before applying to store
 			if err := wal.Append(msg.Index, msg.Index, msg.Command); err != nil {
 				log.Printf("[%s] WAL append failed: %v", *id, err)
 			}
-
 			switch cmd.Op {
 			case "put":
 				s.Put(cmd.Key, cmd.Value)
@@ -124,10 +113,7 @@ func main() {
 				s.Delete(cmd.Key)
 				log.Printf("[%s] applied delete key=%s index=%d", *id, cmd.Key, msg.Index)
 			}
-
 			applyCount++
-
-			// take a snapshot every 10 commits to bound WAL growth
 			if applyCount%10 == 0 {
 				data := s.Snapshot()
 				snap := snapshot.Snapshot{
@@ -144,8 +130,8 @@ func main() {
 		}
 	}()
 
-	// --- HTTP server ---
-	httpSrv := server.NewHTTPServer(s, raftNode)
+	// pass raftNode as both Proposer and StatusReporter
+	httpSrv := server.NewHTTPServer(s, raftNode, raftNode)
 	mux     := http.NewServeMux()
 	httpSrv.RegisterRoutes(mux)
 	raftSrv.RegisterRoutes(mux)
@@ -155,7 +141,6 @@ func main() {
 		log.Fatal(http.ListenAndServe(*httpAddr, mux))
 	}()
 
-	// --- gRPC server ---
 	grpcSrv := grpc.NewServer()
 	pb.RegisterKVServiceServer(grpcSrv, server.NewGRPCServer(s, raftNode))
 	reflection.Register(grpcSrv)

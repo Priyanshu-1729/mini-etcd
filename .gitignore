@@ -1,0 +1,11 @@
+# node data directories (WAL + snapshots are runtime artifacts)
+data/
+
+# Go build output
+*.exe
+*.test
+*.out
+
+# editor
+.vscode/
+.idea/

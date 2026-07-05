@@ -404,3 +404,29 @@ func (rn *RaftNode) Propose(command []byte) bool {
 	rn.log.Append(rn.log.LastIndex(), []LogEntry{entry})
 	return true
 }
+
+// Status returns a snapshot of this node's current Raft state.
+// Used by the /status HTTP endpoint for observability.
+func (rn *RaftNode) Status() NodeStatus {
+	rn.mu.Lock()
+	defer rn.mu.Unlock()
+	stateStr := "follower"
+	if rn.state == Candidate {
+		stateStr = "candidate"
+	} else if rn.state == Leader {
+		stateStr = "leader"
+	}
+	return NodeStatus{
+		ID:       rn.id,
+		State:    stateStr,
+		Term:     rn.currentTerm,
+		IsLeader: rn.state == Leader,
+	}
+}
+
+type NodeStatus struct {
+	ID       string `json:"id"`
+	State    string `json:"state"`
+	Term     uint64 `json:"term"`
+	IsLeader bool   `json:"is_leader"`
+}

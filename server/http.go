@@ -6,21 +6,26 @@ import (
 	"net/http"
 
 	"github.com/Priyanshu-1729/mini-etcd/api"
+	"github.com/Priyanshu-1729/mini-etcd/raft"
 	"github.com/Priyanshu-1729/mini-etcd/store"
 )
 
-// Proposer is the interface the HTTP server uses to propose commands to Raft.
 type Proposer interface {
 	Propose(command []byte) bool
+}
+
+type StatusReporter interface {
+	Status() raft.NodeStatus
 }
 
 type HTTPServer struct {
 	store    *store.Store
 	proposer Proposer
+	reporter StatusReporter
 }
 
-func NewHTTPServer(s *store.Store, p Proposer) *HTTPServer {
-	return &HTTPServer{store: s, proposer: p}
+func NewHTTPServer(s *store.Store, p Proposer, r StatusReporter) *HTTPServer {
+	return &HTTPServer{store: s, proposer: p, reporter: r}
 }
 
 func (h *HTTPServer) RegisterRoutes(mux *http.ServeMux) {
@@ -28,6 +33,11 @@ func (h *HTTPServer) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/v1/kv/put", h.handlePut)
 	mux.HandleFunc("/v1/kv/delete", h.handleDelete)
 	mux.HandleFunc("/v1/kv/watch", h.handleWatch)
+	mux.HandleFunc("/status", h.handleStatus)
+}
+
+func (h *HTTPServer) handleStatus(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, h.reporter.Status())
 }
 
 func (h *HTTPServer) handleGet(w http.ResponseWriter, r *http.Request) {
