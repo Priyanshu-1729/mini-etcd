@@ -80,3 +80,14 @@ func (s *Store) notify(key string, event api.Event) {
 		}
 	}
 }
+// Snapshot returns a deep copy of the current store state.
+// Used by the snapshot layer to persist state to disk.
+func (s *Store) Snapshot() map[string]string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	copy := make(map[string]string, len(s.data))
+	for k, v := range s.data {
+		copy[k] = v
+	}
+	return copy
+}
